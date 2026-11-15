@@ -1,0 +1,70 @@
+name: Interactive SSH Debug (Tailscale)
+
+on:
+  workflow_dispatch:
+    inputs:
+      timeout_minutes:
+        description: 'Session timeout (minutes)'
+        required: false
+        default: '30'
+
+jobs:
+  debug-runner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 1. Print Runner hardware & environment specs
+      - name: Inspect Runner Environment
+        run: |
+          echo "==================== RUNNER SPECS ===================="
+          echo "OS:            $(uname -srmo)"
+          echo "Public IP:     $(curl -s https://api.ipify.org || echo 'N/A')"
+          echo "CPU Cores:     $(nproc)"
+          echo "RAM Available: $(free -h | awk '/^Mem:/ {print $2}')"
+          echo "Disk Free:     $(df -h / | awk 'NR==2 {print $4}')"
+          echo "User:          $(whoami)"
+          echo "Repository:    ${{ github.repository }}"
+          echo "Run ID:        ${{ github.run_id }}"
+          echo "======================================================="
+
+      # 2. Join Tailscale mesh network
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+          hostname: gh-runner-${{ github.run_id }}
+          args: --ssh
+
+      # 3. Print connection instructions and wait
+      - name: Wait for SSH Session
+        run: |
+          TS_IP=$(tailscale ip -4)
+          HOSTNAME="gh-runner-${{ github.run_id }}"
+
+          echo ""
+          echo "==================== SSH CONNECTION INFO ===================="
+          echo "Runner Hostname: $HOSTNAME"
+          echo "Tailscale IPv4:  $TS_IP"
+          echo ""
+          echo "Connect with MagicDNS:  ssh runner@$HOSTNAME"
+          echo "Connect with IP:        ssh runner@$TS_IP"
+          echo "============================================================="
+          echo "When you are done debugging, run this inside the SSH session:"
+          echo "  touch /tmp/exit_session"
+          echo "============================================================="
+
+          TIMEOUT_SEC=$((${{ github.event.inputs.timeout_minutes }} * 60))
+          ELAPSED=0
+
+          while [ ! -f /tmp/exit_session ] && [ $ELAPSED -lt $TIMEOUT_SEC ]; do
+            sleep 10
+            ELAPSED=$((ELAPSED + 10))
+          done
+
+          echo "Session finished or timed out. Exiting runner cleanly..."
